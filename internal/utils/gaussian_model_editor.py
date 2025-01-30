@@ -14,28 +14,29 @@ class MultipleGaussianModelEditor:
             gaussian_models: must be same type, sh_degree and pre-activated state
         """
         self.device = device
+        self.gaussian_models = gaussian_models
         if self.device is None:
-            self.device = gaussian_models[0].means.device
+            self.device = gaussian_models[0][0].means.device
 
         # get total number of gaussians and indices of each model
         total_gaussian_num = 0
         model_gaussian_indices = []
         for i in gaussian_models:
-            n = i.get_xyz.shape[0]
+            n = i[0].get_xyz.shape[0]
             model_gaussian_indices.append((total_gaussian_num, total_gaussian_num + n))
             total_gaussian_num += n
         self.model_gaussian_indices = model_gaussian_indices
 
         if len(gaussian_models) == 1:
-            self.gaussian_model = gaussian_models[0]
+            self.gaussian_model = gaussian_models[0][0]
         else:
             # create a same model type
-            self.gaussian_model = gaussian_models[0].config.instantiate()
+            self.gaussian_model = gaussian_models[0][0].config.instantiate()
             self.gaussian_model.setup_from_number(1)
             self.gaussian_model.to(self.device)
-            if gaussian_models[0].is_pre_activated is True:
+            if gaussian_models[0][0].is_pre_activated is True:
                 self.gaussian_model.pre_activate_all_properties()
-            self.gaussian_model.active_sh_degree = gaussian_models[0].active_sh_degree
+            self.gaussian_model.active_sh_degree = gaussian_models[0][0].active_sh_degree
 
             # store all properties into this model
             self.gaussian_model.properties = self._concat_all_properties(gaussian_models, self.device)
@@ -49,14 +50,29 @@ class MultipleGaussianModelEditor:
     @staticmethod
     def _concat_all_properties(models, device):
         properties = {}
-        for name in models[0].property_names:
-            properties[name] = torch.concat([model.get_property(name).to(device) for model in models], dim=0)
+        for name in models[0][0].property_names:
+            properties[name] = torch.concat([model[0].get_property(name).to(device) for model in models], dim=0)
         return properties
 
     def get_opacities(self):
         if self._modified_opacities is None:
             return self.gaussian_model.get_opacities()
         return self._modified_opacities
+    
+    def replace_properties_with_time(self, time):
+        models = self.gaussian_models
+        properties = {}
+        for name in models[0][0].property_names:
+            lst = []
+            for model in models:
+                if len(model) == 1:
+                    lst.append(model[0].get_property(name).to(self.device))
+                else:
+                    time_idx = round((len(model) - 1) * time)
+                    lst.append(model[time_idx].get_property(name).to(self.device))
+            properties[name] = torch.concat(lst, dim=0)
+        
+        self.gaussian_model.properties = properties
 
     @property
     def get_opacity(self):

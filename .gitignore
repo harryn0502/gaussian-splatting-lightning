@@ -1,7 +1,7 @@
 .idea
 outputs
 camera_paths
-renders
+# renders
 edited
 clusters
 segments

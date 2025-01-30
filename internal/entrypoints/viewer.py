@@ -26,6 +26,7 @@ def cli():
     parser.add_argument("--vanilla_deformable", action="store_true", default=False)
     parser.add_argument("--vanilla_gs4d", action="store_true", default=False)
     parser.add_argument("--vanilla_gs2d", action="store_true", default=False)
+    parser.add_argument("--vanilla_gs_gs4d", action="store_true", default=False)
     parser.add_argument("--up", nargs=3, required=False, type=float, default=None)
     parser.add_argument("--default_camera_position", "--dcp", nargs=3, required=False, type=float, default=None)
     parser.add_argument("--default_camera_look_at", "--dcla", nargs=3, required=False, type=float, default=None)

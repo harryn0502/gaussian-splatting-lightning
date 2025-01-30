@@ -36,7 +36,7 @@ class GaussianModelLoader:
         # search checkpoint
         checkpoint_dir = os.path.join(model_path, "checkpoints")
         # find checkpoint with max iterations
-        load_from = None
+        load_from = []
         previous_checkpoint_iteration = -1
         for i in glob.glob(os.path.join(checkpoint_dir, "*.ckpt")):
             try:
@@ -46,10 +46,13 @@ class GaussianModelLoader:
                 continue
             if checkpoint_iteration > previous_checkpoint_iteration:
                 previous_checkpoint_iteration = checkpoint_iteration
-                load_from = i
+                load_from = [i]
 
-        # not a checkpoint can be found, search point cloud
-        if load_from is None:
+        if len(load_from) == 0:
+            load_from = sorted(glob.glob(os.path.join(model_path, "gaussian_pertimestamp", "time_*")))
+
+        # not a checkpoint or sequence of 3D gaussians can be found, search point cloud
+        if len(load_from) == 0:
             previous_point_cloud_iteration = -1
             for i in glob.glob(os.path.join(model_path, "point_cloud", "iteration_*")):
                 try:
@@ -60,9 +63,9 @@ class GaussianModelLoader:
 
                 if point_cloud_iteration > previous_point_cloud_iteration:
                     previous_point_cloud_iteration = point_cloud_iteration
-                    load_from = os.path.join(i, "point_cloud.ply")
+                    load_from.append(os.path.join(i, "point_cloud.ply"))
 
-        assert load_from is not None, "not a checkpoint or point cloud can be found"
+        assert len(load_from) != 0, "not a checkpoint or point cloud can be found"
 
         return load_from
 

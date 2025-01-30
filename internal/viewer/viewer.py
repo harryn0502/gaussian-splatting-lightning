@@ -36,6 +36,7 @@ class Viewer:
             vanilla_deformable: bool = False,
             vanilla_gs4d: bool = False,
             vanilla_gs2d: bool = False,
+            vanilla_gs_gs4d: bool = False,
             up: list[float] = None,
             default_camera_position: List[float] = None,
             default_camera_look_at: List[float] = None,
@@ -110,7 +111,7 @@ class Viewer:
             training_output_base_dir = os.getcwd()
             dataset_type = "Colmap"
         else:
-            load_from = self._search_load_file(model_paths[0])
+            load_from = self._search_load_file(model_paths[0])[0]
 
             # detect whether a SegAnyGS output
             if seganygs is None and load_from.endswith(".ckpt"):
@@ -165,6 +166,9 @@ class Viewer:
                 from internal.renderers.vanilla_2dgs_renderer import Vanilla2DGSRenderer
                 renderer = Vanilla2DGSRenderer()
                 self.extra_video_render_args.append("--vanilla_gs2d")
+            elif vanilla_gs_gs4d is True:
+                from internal.renderers.vanilla_gs_gs4d_renderer import VanillaGSGS4DRenderer
+                renderer = VanillaGSGS4DRenderer()
             elif vanilla_seganygs is True:
                 renderer = self._load_vanilla_seganygs(load_from)
                 turn_off_edit_and_video_render_panel()
@@ -207,20 +211,25 @@ class Viewer:
                 model = MultipleGaussianModelEditor([model], device=self.device)
         else:
             # switch to vanilla renderer
-            model_list = [model.to(torch.device("cpu"))]
+            model_list = [[model.to(torch.device("cpu"))]]
             renderer = VanillaRenderer()
+            if vanilla_gs_gs4d is True:
+                renderer = VanillaGSGS4DRenderer()
             for model_path in addition_models:
-                load_from = self._search_load_file(model_path)
-                if load_from.endswith(".ckpt"):
-                    load_results = self._do_initialize_models_from_checkpoint(load_from, device=torch.device("cpu"))
-                else:
-                    load_results = self._do_initialize_models_from_point_cloud(load_from, self.sh_degree, device=torch.device("cpu"))
-                model_list.append(load_results[0])
+                load_from_list = self._search_load_file(model_path)
+                models = []
+                for load_from in load_from_list:
+                    if load_from.endswith(".ckpt"):
+                        models.append(self._do_initialize_models_from_checkpoint(load_from, device=torch.device("cpu"))[0])
+                    else:
+                        models.append(self._do_initialize_models_from_point_cloud(load_from, self.sh_degree, device=torch.device("cpu"))[0])
+                model_list.append(models)
 
             self.loaded_model_count += len(addition_models)
 
-            for i in model_list:
-                i.freeze()
+            for each_model in model_list:
+                for model_seq in each_model:
+                    model_seq.freeze()
 
             model = MultipleGaussianModelEditor(model_list, device=self.device)
 
