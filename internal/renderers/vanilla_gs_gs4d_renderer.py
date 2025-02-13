@@ -76,8 +76,6 @@ class VanillaGSGS4DRenderer(Renderer):
 
         rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-        time = viewpoint_camera.time.item()
-        pc.replace_properties_with_time(time)
         means3D = pc.get_xyz
         means2D = screenspace_points
         opacity = pc.get_opacity

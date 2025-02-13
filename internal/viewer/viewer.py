@@ -624,7 +624,7 @@ class Viewer:
                     step=0.01,
                     initial_value=0.,
                 )
-                self.time_slider.on_update(self._handle_option_updated)
+                self.time_slider.on_update(self._handle_time_updated)
 
             # add cameras
             if self.show_cameras is True:
@@ -732,6 +732,15 @@ class Viewer:
 
     def handle_option_updated(self, _):
         return self._handle_option_updated(_)
+
+    def _handle_time_updated(self, _):
+        """
+        Update time and push new render to all client
+        """
+        time = self.time_slider.value
+        self.gaussian_model.replace_properties_with_time(time)
+        self.transform_panel.transform_all_models()
+        return self.rerender_for_all_client()
 
     def rerender_for_client(self, client_id: int):
         """

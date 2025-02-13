@@ -73,6 +73,7 @@ class MultipleGaussianModelEditor:
             properties[name] = torch.concat(lst, dim=0)
         
         self.gaussian_model.properties = properties
+        self.backup_properties()
 
     @property
     def get_opacity(self):
