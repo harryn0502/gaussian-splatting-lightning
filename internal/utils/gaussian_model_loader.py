@@ -63,7 +63,9 @@ class GaussianModelLoader:
 
                 if point_cloud_iteration > previous_point_cloud_iteration:
                     previous_point_cloud_iteration = point_cloud_iteration
-                    load_from.append(os.path.join(i, "point_cloud.ply"))
+                    path = os.path.join(i, "point_cloud.ply")
+
+            load_from.append(path)
 
         assert len(load_from) != 0, "not a checkpoint or point cloud can be found"
 
