@@ -1,8 +1,14 @@
 .idea
 outputs
 camera_paths
-# renders
+renders
 edited
 clusters
 segments
 **/__pycache__
+
+# Extras
+*.txt
+*.out
+viewer_init_args.py
+*.pth
