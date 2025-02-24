@@ -5,4 +5,11 @@ renders
 edited
 clusters
 segments
+segmented
 **/__pycache__
+
+# Extras
+*.txt
+*.out
+viewer_init_args.py
+*.pth

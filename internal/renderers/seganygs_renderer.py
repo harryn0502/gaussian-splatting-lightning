@@ -13,6 +13,8 @@ from ..cameras import Camera
 from ..models.gaussian import GaussianModel
 from internal.utils.seganygs import ScaleGateUtils, SegAnyGSUtils
 
+import datetime
+import viser
 
 class SegAnyGSRenderer(Renderer):
     def __init__(
@@ -335,6 +337,12 @@ class ViewerOptions:
             "clusters",
         )
 
+        # Dictionary of available saving options
+        self.available_saving_options = {
+            "segment3d_out": "segment3d_out",
+            "segment3d_removed": "segment3d_removed",
+        }
+
         # setup ui
         self._setup_output_type_dropdown()
         self._setup_scale_number()
@@ -349,6 +357,9 @@ class ViewerOptions:
                 self._setup_save_cluster()
             with server.gui.add_folder("Load Cluster"):
                 self._setup_load_cluster()
+
+        # Setup the save gaussian folder
+        self._setup_save_gaussian_folder()
 
     @property
     def scale_gate(self) -> ScaleGateUtils:
@@ -870,3 +881,117 @@ class ViewerOptions:
 
     def _filename_check(self, name) -> bool:
         return re.search(r"^[a-zA-Z0-9_\-.]+$", name) is not None
+
+    """
+    Save Gaussians
+    """
+    def _setup_save_gaussian_folder(self):
+        with self.server.gui.add_folder("Save"):
+            saving_option_dropdown = self.server.gui.add_dropdown(
+                label="Saving Option",
+                options=list(self.available_saving_options.keys()),
+            )
+            name_text = self.server.gui.add_text(
+                "Name",
+                initial_value="segmented_out_"+datetime.datetime.now().strftime("%Y%m%d_%H%M%S"),
+            )
+            save_button = self.server.gui.add_button("Save")
+
+            @save_button.on_click
+            def _(event: viser.GuiEvent):
+                # skip if not triggered by client
+                if event.client is None:
+                    return
+                try:
+                    save_button.disabled = True
+                    message_text = None
+
+                    with self.server.atomic():
+                        try:
+                            # check whether is a valid name
+                            name = name_text.value
+                            match = re.search(r"^[a-zA-Z0-9_\-]+$", name)
+                            if match:
+                                output_directory = "segmented"
+                                os.makedirs(output_directory, exist_ok=True)
+
+                                # Get saving option
+                                saving_option = self.available_saving_options.get(saving_option_dropdown.value)
+                                # Get Gaussian Model based on the saving option
+                                non_pre_activated_properties = self.get_non_pre_activated_properties(saving_option)
+
+                                if self.viewer.checkpoint is None:
+                                    from internal.utils.gaussian_utils import GaussianPlyUtils
+                                    # save ply
+                                    ply_save_path = os.path.join(output_directory, "{}.ply".format(name))
+                                    GaussianPlyUtils.load_from_model_properties(non_pre_activated_properties, self.viewer.gaussian_model.max_sh_degree).to_ply_format().save_to_ply(ply_save_path)
+                                    message_text = "Saved to {}".format(ply_save_path)
+                                else:
+                                    # save as a checkpoint if viewer started from a checkpoint
+                                    checkpoint_save_path = os.path.join(output_directory, "{}.ckpt".format(name))
+                                    checkpoint = self.viewer.checkpoint
+                                    # update state dict of the checkpoint
+                                    properties = non_pre_activated_properties
+                                    for name, value in properties.items():
+                                        key = "gaussian_model.gaussians.{}".format(name)
+                                        checkpoint["state_dict"][key] = properties[name].to(device=checkpoint["state_dict"][key].device)
+                                    # TODO: density controller and optimizer states need to be pruned too
+                                    # save
+                                    torch.save(checkpoint, checkpoint_save_path)
+                                    message_text = "Saved to {}".format(checkpoint_save_path)
+                            else:
+                                message_text = "Invalid name"
+                        except:
+                            traceback.print_exc()
+
+                    # show message
+                    with event.client.gui.add_modal("Message") as modal:
+                        if message_text is not None:
+                            event.client.gui.add_markdown(message_text)
+                        close_button = event.client.gui.add_button("Close")
+
+                        @close_button.on_click
+                        def _(_) -> None:
+                            modal.close()
+
+                finally:
+                    save_button.disabled = False
+
+    def get_non_pre_activated_properties(self, option):
+        """
+        Get non_pre_activated properties of a gaussian model based on the given saving option
+        """
+        # Get non_pre_activated_properties and segment mask
+        properties = self.viewer.gaussian_model.get_non_pre_activated_properties()
+        segment_mask = self.segment_mask
+
+        # Perform masking based on the given option
+        if option == "segment3d_out":
+            properties = self._segment3d_out(properties, segment_mask)
+        elif option == "segment3d_removed":
+            properties = self._segment3d_removed(properties, segment_mask)
+        else:
+            raise RuntimeError("Invalid saving option")
+        return properties
+
+    def _segment3d_out(self, properties, mask):
+        """
+        Segment out the non_pre_activated_properties of a given gaussian model based on the segment mask
+        """
+        # Segment out the properties based on the segment mask
+        segmented_properties = {}
+        for key, value in properties.items():
+            segmented_properties[key] = value[mask]
+
+        return segmented_properties
+
+    def _segment3d_removed(self, properties, mask):
+        """
+        Remove the segment of the non_pre_activated_properties of a given gaussian model based on the segment mask
+        """
+        # Remove the segment based on the segment mask
+        remaining_properties = {}
+        for key, value in properties.items():
+            remaining_properties[key] = value[~mask]
+
+        return remaining_properties
