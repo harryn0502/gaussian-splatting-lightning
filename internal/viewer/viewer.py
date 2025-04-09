@@ -48,6 +48,7 @@ class Viewer:
             gsplat_v1_example_aa: bool = False,
             seganygs: str = None,
             vanilla_seganygs: bool = False,
+            vanilla_ctag: bool = True,
             vanilla_mip: bool = False,
             vanilla_pvg: bool = False,
     ):
@@ -136,6 +137,10 @@ class Viewer:
                 load_from = load_from[:-len(os.path.basename(load_from))]
                 load_from = os.path.join(load_from, "scene_point_cloud.ply")
 
+            if vanilla_ctag is True:
+                load_from = load_from[:-len(os.path.basename(load_from))]
+                load_from = os.path.join(load_from, "scene_point_cloud.ply")
+
             # whether model is trained by other implementations
             if vanilla_gs4d is True:
                 self.simplified_model = False
@@ -178,6 +183,9 @@ class Viewer:
                 self.extra_video_render_args.append("--vanilla_gs2d")
             elif vanilla_seganygs is True:
                 renderer = self._load_vanilla_seganygs(load_from)
+                turn_off_edit_and_video_render_panel()
+            elif vanilla_ctag is True:
+                renderer = self._load_vanilla_ctag(load_from)
                 turn_off_edit_and_video_render_panel()
             elif vanilla_mip is True:
                 renderer = self._load_vanilla_mip(load_from)
@@ -315,6 +323,46 @@ class Viewer:
 
         from internal.renderers.seganygs_renderer import SegAnyGSRenderer
         return SegAnyGSRenderer(semantic_features=semantic_features, scale_gate=scale_gate, anti_aliased=False)
+
+    def _load_vanilla_ctag(self, path):
+        from plyfile import PlyData
+        from internal.utils.gaussian_utils import GaussianPlyUtils
+
+        max_iteration = -1
+        load_from = None
+        model_output = os.path.dirname(os.path.dirname(path))
+        for i in os.listdir(model_output):
+            if i.startswith("iteration_") is False:
+                continue
+            ply_file_path = os.path.join(model_output, i, "contrastive_feature_point_cloud.ply")
+            if os.path.exists(ply_file_path) is False:
+                continue
+            try:
+                iteration = int(i.split("_")[1])
+            except:
+                break
+            if iteration > max_iteration:
+                load_from = ply_file_path
+        assert load_from is not None, "'contrastive_feature_point_cloud.ply' not found"
+        print(f"load SegAnyGS from '{load_from}'...")
+
+        plydata = PlyData.read(load_from)
+        semantic_features = torch.tensor(
+            GaussianPlyUtils.load_array_from_plyelement(plydata.elements[0], "f_"),
+            dtype=torch.float,
+            device=self.device,
+        )
+
+        scale_gate_state_dict = torch.load(os.path.join(os.path.dirname(load_from), "scale_gate.pt"), map_location="cpu")
+        scale_gate = torch.nn.Sequential(
+            torch.nn.Linear(1, 32, bias=True),
+            torch.nn.Sigmoid()
+        )
+        scale_gate.load_state_dict(scale_gate_state_dict)
+        scale_gate = scale_gate.to(self.device)
+
+        from internal.renderers.click_to_animate_gaussian_renderer import ClickToAnimateGaussian
+        return ClickToAnimateGaussian(semantic_features=semantic_features, scale_gate=scale_gate, anti_aliased=False)
 
     def _load_vanilla_mip(self, load_from):
         from plyfile import PlyData

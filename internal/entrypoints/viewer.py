@@ -44,6 +44,7 @@ def cli():
     parser.add_argument("--seganygs", type=str, default=None,
                         help="Path to a SegAnyGaussian model output directory or checkpoint file")
     parser.add_argument("--vanilla_seganygs", action="store_true", default=False)
+    parser.add_argument("--vanilla_ctag", action="store_true", default=False)
     parser.add_argument("--vanilla_mip", action="store_true", default=False)
     parser.add_argument("--vanilla_pvg", action="store_true", default=False)
     parser.add_argument("--float32_matmul_precision", "--fp", type=str, default=None)
