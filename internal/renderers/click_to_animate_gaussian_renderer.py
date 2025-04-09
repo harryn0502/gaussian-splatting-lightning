@@ -50,9 +50,6 @@ class ClickToAnimateGaussian(Renderer):
         self.segment_mask = None
         self.similarities = None
 
-        self.cluster_color = None
-        self.cluster_result = None
-
         # reduce CUDA memory consumption
         # self.semantic_features = self.semantic_features.cpu()  # slow scale update a little
         self.scale_conditioned_semantic_features = self.scale_conditioned_semantic_features.cpu()
@@ -65,11 +62,9 @@ class ClickToAnimateGaussian(Renderer):
             "pca3d": self._pca_as_color,
             "scale_gated_pca2d": self._scale_gated_semantic_features_as_color,
             "scale_gated_pca3d": self._scale_gated_pca_as_color,
-            "cluster3d": self._cluster_as_color,
             "segment3d": self._segment_as_color,
             "segment3d_out": self._segment_out,
             "segment3d_removed": self._segment_removed,
-            "segment3d_similarities": self._segment_similarities_as_color,
         }
 
         self.available_output_types = {
@@ -79,11 +74,9 @@ class ClickToAnimateGaussian(Renderer):
             "pca3d": "pca3d",
             "scale_gated_pca2d": "semantic_features_scale_gated",
             "scale_gated_pca3d": "pca3d_scale_gated",
-            "cluster3d": "cluster3d",
             "segment3d": "segment3d",
             "segment3d_out": "segment3d_out",
             "segment3d_removed": "segment3d_removed",
-            "segment3d_similarities": "segment3d_similarities",
         }
 
         self.output_post_processor = {
@@ -181,21 +174,6 @@ class ClickToAnimateGaussian(Renderer):
     def _scale_gated_pca_as_color(self, project_results, pc: GaussianModel, viewpoint_camera, bg_color, opacities):
         return self.scale_gated_pca_colors, bg_color, opacities
 
-    def _cluster_as_color(self, project_results, pc: GaussianModel, viewpoint_camera, bg_color, opacities):
-        if self.cluster_color is None:
-            # TODO: fix cluster twice sometimes
-            try:
-                self.viewer_options.print_cluster_start_message()
-            except:
-                pass
-            self.cluster_in_3d()
-            try:
-                self.viewer_options.print_cluster_finished_message()
-            except:
-                pass
-
-        return self.cluster_color, bg_color, opacities
-
     def _segment_as_color(self, project_results, pc: GaussianModel, viewpoint_camera, bg_color, opacities):
         colors, bg_color, opacities = self._shs_to_rgb(project_results, pc, viewpoint_camera, bg_color, opacities)
         if self.segment_mask is not None:
@@ -214,17 +192,8 @@ class ClickToAnimateGaussian(Renderer):
             opacities = opacities * (~self.segment_mask).unsqueeze(-1)
         return colors, bg_color, opacities
 
-    def _segment_similarities_as_color(self, project_results, pc: GaussianModel, viewpoint_camera, bg_color, opacities):
-        if self.similarities is not None:
-            return self.similarities.unsqueeze(-1), torch.zeros((1, 1), dtype=torch.float, device=opacities.device), opacities
-        return torch.zeros((pc.get_xyz.shape[0], 3), dtype=torch.float, device=opacities.device), bg_color, opacities
-
-    def cluster_in_3d(self):
-        self.cluster_result = SegAnyGSUtils.cluster_3d_as_dict(self.scale_conditioned_semantic_features)
-        self.cluster_color = torch.tensor(self.cluster_result["point_colors"], dtype=torch.float, device="cuda")
-
     def setup_web_viewer_tabs(self, viewer, server, tabs):
-        with tabs.add_tab("Semantic"):
+        with tabs.add_tab("ClickToAnimate"):
             self.viewer_options = ViewerOptions(self, viewer, server, initial_scale=self.initial_scale)
 
     def get_available_outputs(self) -> Dict:
@@ -333,10 +302,6 @@ class ViewerOptions:
             os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
             "segments",
         )
-        self.cluster_result_save_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-            "clusters",
-        )
 
         # Dictionary of available saving options
         self.available_saving_options = {
@@ -351,16 +316,12 @@ class ViewerOptions:
         with server.gui.add_folder("Segment"):
             self._setup_segment()
 
-        with server.gui.add_folder("Cluster"):
-            self._setup_cluster()
-            server.gui.add_markdown("")
-            with server.gui.add_folder("Save Cluster"):
-                self._setup_save_cluster()
-            with server.gui.add_folder("Load Cluster"):
-                self._setup_load_cluster()
+        # Setup the animate gaussian folder
+        self._setup_animate_gaussian_folder()
 
         # Setup the save gaussian folder
         self._setup_save_gaussian_folder()
+
 
     @property
     def scale_gate(self) -> ScaleGateUtils:
@@ -391,18 +352,6 @@ class ViewerOptions:
     @similarities.setter
     def similarities(self, value):
         self.renderer.similarities = value
-
-    @property
-    def cluster_result(self):
-        return self.renderer.cluster_result
-
-    @cluster_result.setter
-    def cluster_result(self, value):
-        self.renderer.cluster_result = value
-        if value is None:
-            self.renderer.cluster_color = None
-        else:
-            self.renderer.cluster_color = torch.tensor(value["point_colors"], dtype=torch.float, device="cuda")
 
     def _setup_output_type_dropdown(self):
         render_type_dropdown = self.server.gui.add_dropdown(
@@ -703,116 +652,6 @@ class ViewerOptions:
                 finally:
                     load_button.disabled = False
 
-    """
-    Cluster
-    """
-
-    def _setup_cluster(self):
-        viewer, server = self.viewer, self.server
-
-        clustering_button = server.gui.add_button(
-            label="Clustering...",
-            disabled=True,
-            visible=False,
-        )
-        cluster_button = server.gui.add_button(
-            label="Re-Cluster in 3D",
-        )
-
-        @cluster_button.on_click
-        def _(event):
-            cluster_button.visible = False
-            clustering_button.visible = True
-            self.print_cluster_start_message(event.client)
-            with server.atomic():
-                self.renderer.cluster_in_3d()
-            cluster_button.visible = True
-            clustering_button.visible = False
-            self.print_cluster_finished_message(event.client)
-
-            # switch output type to cluster3d
-            self._switch_renderer_output_type("cluster3d")
-
-        reshuffle_color_button = server.gui.add_button("Reshuffle Color", color="green")
-
-        @reshuffle_color_button.on_click
-        def _(event):
-            if self.cluster_result is None:
-                self._show_message(event.client, "Please click 'Re-Cluster in 3D' first")
-                return
-            cluster_result = self.cluster_result
-            with server.atomic():
-                new_color = SegAnyGSUtils.cluster_label2colors(cluster_result["seg_score"])
-                cluster_result["point_colors"] = new_color
-                self.cluster_result = cluster_result
-            viewer.rerender_for_all_client()
-
-    def _setup_save_cluster(self):
-        viewer, server = self.viewer, self.server
-
-        save_name_text = server.gui.add_text(label="Name", initial_value="")
-        save_cluster_button = server.gui.add_button(label="Save")
-
-        @save_cluster_button.on_click
-        def _(event):
-            save_cluster_button.disabled = True
-            with server.atomic():
-                try:
-                    output_path = self.save_cluster_results(save_name_text.value)
-                    message_text = f"Saved to '{output_path}'"
-                except Exception as e:
-                    message_text = str(e)
-                    traceback.print_exc()
-            save_cluster_button.disabled = False
-            self._show_message(event.client, message_text)
-
-    def _setup_load_cluster(self):
-        viewer, server = self.viewer, self.server
-
-        reload_file_list_button = server.gui.add_button(
-            label="Refresh",
-        )
-        cluster_result_file_dropdown = server.gui.add_dropdown(
-            label="File",
-            options=self._scan_cluster_files(),
-            initial_value="",
-        )
-        load_cluster_button = server.gui.add_button(
-            label="Load",
-        )
-
-        @reload_file_list_button.on_click
-        def _(_):
-            cluster_result_file_dropdown.options = self._scan_cluster_files()
-
-        @load_cluster_button.on_click
-        def _(event):
-            match = re.search(r"^[a-zA-Z0-9_\-.]+\.pt$", cluster_result_file_dropdown.value)
-            if not match:
-                self._show_message(event.client, "Invalid filename")
-                return
-
-            loaded = False
-
-            load_cluster_button.disabled = True
-            with server.atomic():
-                cluster_result = torch.load(os.path.join(self.cluster_result_save_dir, cluster_result_file_dropdown.value))
-                if isinstance(cluster_result, dict) is False or "point_colors" not in cluster_result:
-                    self._show_message(event.client, "Invalid file content")
-                elif cluster_result["point_colors"].shape[0] == self.semantic_features.shape[0]:
-                    self.cluster_result = cluster_result
-                    loaded = True
-                else:
-                    self._show_message(event.client, "File not match to current scene")
-
-            # switch output type to cluster3d
-            if loaded is True:
-                self._switch_renderer_output_type("cluster3d")
-            load_cluster_button.disabled = False
-
-    def _scan_cluster_files(self):
-        return self._scan_pt_files(self.cluster_result_save_dir)
-
     def _scan_pt_files(self, path):
         file_list = []
         try:
@@ -822,23 +661,6 @@ class ViewerOptions:
         except:
             pass
         return file_list
-
-    def save_cluster_results(self, name):
-        if self.cluster_result is None:
-            raise RuntimeError("Please click 'Re-Cluster in 3D' first")
-
-        match = re.search(r"^[a-zA-Z0-9_\-.]+$", name)
-        if match:
-            output_path = os.path.join(self.cluster_result_save_dir, f"{name}.pt")
-            if os.path.exists(output_path):
-                raise RuntimeError("File already exists")
-
-            os.makedirs(os.path.dirname(output_path), exist_ok=True)
-            torch.save(self.cluster_result, output_path)
-
-            return output_path
-        else:
-            raise RuntimeError("Invalid name")
 
     def _switch_renderer_output_type(self, type):
         output_type_info = self.renderer.get_available_outputs().get(type, None)
@@ -853,16 +675,6 @@ class ViewerOptions:
             i(type)
 
         viewer.rerender_for_all_client()
-
-    def print_cluster_start_message(self, client=None):
-        message = "Cluster takes some time. The viewer will not response any requests during this process (may including the 'Close' button below), please be patient...<br/>You will be noticed when it is completed."
-        print(message)
-        self._show_message(client, message)
-
-    def print_cluster_finished_message(self, client=None):
-        message = f"Cluster completed: {len(self.cluster_result['cluster_labels'])} labels"
-        print(message)
-        self._show_message(client, message)
 
     def _show_message(self, client, message: str):
         target = client
@@ -996,3 +808,89 @@ class ViewerOptions:
             remaining_properties[key] = value[~mask]
 
         return remaining_properties
+    
+    """
+    Animate Gaussian
+    """
+    def _setup_animate_gaussian_folder(self):
+        with self.server.gui.add_folder("Animate"):
+            preview_animation_button = self.server.gui.add_button("Preview Animation")
+            apply_animation_button = self.server.gui.add_button("Apply Animation")
+
+            @preview_animation_button.on_click
+            def _(event: viser.GuiEvent):
+                # skip if not triggered by client
+                if event.client is None:
+                    return
+                try:
+                    preview_animation_button.disabled = True
+                    with self.server.atomic():
+                        try:
+                            if self.segment_mask is not None:
+                                camera = self._get_camera(event.client)
+                                with torch.no_grad():
+                                    image = self._get_image(self.viewer.gaussian_model, camera, self.viewer.scaling_modifier.value)
+                                    image = torch.permute(image, (1, 2, 0))
+                                    event.client.set_background_image(
+                                        image.cpu().numpy(),
+                                        format=self.viewer.image_format,
+                                        jpeg_quality=self.viewer.max_res_when_static.value,
+                                    )
+                                message_text = "Preview Animation Created"
+                            else:
+                                message_text = "Nothing Selected"
+
+                            # show message
+                            with event.client.gui.add_modal("Message") as modal:
+                                if message_text is not None:
+                                    event.client.gui.add_markdown(message_text)
+                                close_button = event.client.gui.add_button("Close")
+
+                                @close_button.on_click
+                                def _(_) -> None:
+                                    modal.close()
+                        except:
+                            traceback.print_exc()
+                finally:
+                    preview_animation_button.disabled = False
+
+            @apply_animation_button.on_click
+            def _(event: viser.GuiEvent):
+                # skip if not triggered by client
+                if event.client is None:
+                    return
+                try:
+                    apply_animation_button.disabled = True
+                    message_text = "Animation Applied"
+
+                    # show message
+                    with event.client.gui.add_modal("Message") as modal:
+                        if message_text is not None:
+                            event.client.gui.add_markdown(message_text)
+                        close_button = event.client.gui.add_button("Close")
+
+                        @close_button.on_click
+                        def _(_) -> None:
+                            modal.close()
+                finally:
+                    apply_animation_button.disabled = False
+
+    def _get_camera(self, client):
+        from internal.viewer.client import ClientThread
+        return ClientThread.get_camera(
+                client.camera,
+                image_size=self.viewer.max_res_when_static.value,
+            ).to_device(self.viewer.device)
+
+    def _get_image(self, gaussian_model, camera, scaling_modifier: float = 1.):
+        image = self.renderer(
+            camera,
+            gaussian_model,
+            self.viewer.viewer_renderer.background_color,
+            scaling_modifier=scaling_modifier,
+            render_types=["segment3d_out"],
+        )["segment3d_out"]
+        if image.shape[0] == 1:
+            image = image.repeat(3, 1, 1)
+        image = torch.clamp(image, max=1.)
+        return image

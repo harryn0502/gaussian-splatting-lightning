@@ -133,11 +133,7 @@ class Viewer:
                     with open(seganygs_tag_file_path, "r") as f:
                         load_from = self._search_load_file(f.read())
 
-            if vanilla_seganygs is True:
-                load_from = load_from[:-len(os.path.basename(load_from))]
-                load_from = os.path.join(load_from, "scene_point_cloud.ply")
-
-            if vanilla_ctag is True:
+            if vanilla_seganygs is True or vanilla_ctag is True:
                 load_from = load_from[:-len(os.path.basename(load_from))]
                 load_from = os.path.join(load_from, "scene_point_cloud.ply")
 
@@ -185,6 +181,7 @@ class Viewer:
                 renderer = self._load_vanilla_seganygs(load_from)
                 turn_off_edit_and_video_render_panel()
             elif vanilla_ctag is True:
+                self.enable_transform = True
                 renderer = self._load_vanilla_ctag(load_from)
                 turn_off_edit_and_video_render_panel()
             elif vanilla_mip is True:
