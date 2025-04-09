@@ -32,7 +32,7 @@ class GaussianModelLoader:
     def search_load_file(model_path: str) -> str:
         # if a directory path is provided, auto search checkpoint or ply
         if os.path.isdir(model_path) is False:
-            return model_path
+            return [model_path]
         # search checkpoint
         checkpoint_dir = os.path.join(model_path, "checkpoints")
         # find checkpoint with max iterations
@@ -65,7 +65,7 @@ class GaussianModelLoader:
                     previous_point_cloud_iteration = point_cloud_iteration
                     path = os.path.join(i, "point_cloud.ply")
 
-            load_from.append(path)
+                    load_from.append(path)
 
         assert len(load_from) != 0, "not a checkpoint or point cloud can be found"
 

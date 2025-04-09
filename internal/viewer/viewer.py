@@ -208,7 +208,7 @@ class Viewer:
             model.freeze()
 
             if self.show_edit_panel is True or enable_transform is True:
-                model = MultipleGaussianModelEditor([model], device=self.device)
+                model = MultipleGaussianModelEditor([[model]], device=self.device)
         else:
             # switch to vanilla renderer
             model_list = [[model.to(torch.device("cpu"))]]
