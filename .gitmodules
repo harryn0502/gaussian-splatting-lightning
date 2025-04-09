@@ -1,0 +1,3 @@
+[submodule "submodules/dreamgaussian4d"]
+	path = submodules/dreamgaussian4d
+	url = https://github.com/jiawei-ren/dreamgaussian4d.git
