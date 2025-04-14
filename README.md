@@ -57,17 +57,17 @@ cd gaussian-splatting-lightning
 
 ```bash
 # create virtual environment
-conda create -yn gspl python=3.9 pip
+conda create -yn gspl python=3.10 pip
 conda activate gspl
 ```
 
 ### 1.3. Install PyTorch
-* Tested on `PyTorch==2.0.1`
+* Tested on `PyTorch==2.1.1`
 * You must install the one match to the version of your nvcc (nvcc --version)
 * For CUDA 11.8
 
   ```bash
-  pip install -r requirements/pyt201_cu118.txt
+  pip install -r requirements/pyt211_cu118.txt
   ```
 
 ### 1.4. Install requirements
@@ -95,14 +95,29 @@ pip install -r requirements.txt
     ```
   * <a href="https://github.com/facebookresearch/pytorch3d/blob/main/INSTALL.md">facebookresearch/pytorch3d</a>
 
-    For `torch==2.0.1` and cuda 11.8:
+    For `torch==2.1.1` and cuda 11.8:
     
     ```bash
     pip install -r requirements/pytorch3d-pre.txt
-    pip install --no-index --no-cache-dir -r requirements/pytorch3d-py39_cu118_pyt201.txt
+    pip install --no-index --no-cache-dir -r requirements/pytorch3d-py310_cu118_pyt211.txt
     ```
    
   * Download <a href="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth">ViT-H SAM model</a>, place it to the root dir of this repo.: `wget -O sam_vit_h_4b8939.pth https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth`
+
+* If you want to use ClickToAnimateGaussian
+  * dreamgaussian4d
+    ```bash
+    # Update submodules
+    git submodule update --init submodules/dreamgaussian4d
+
+    # Install requirements
+    pip install xformers==0.0.23 --no-deps --index-url https://download.pytorch.org/whl/cu118
+    pip install -r submodules/dreamgaussian4d/requirements.txt
+
+    # Modified gaussian splatting (+ depth, alpha rendering)
+    git submodule update --init --recursive submodules/diff-gaussian-rasterization
+    pip install ./submodules/diff-gaussian-rasterization
+    ```
 
 ## 2. Training
 ### 2.1. Basic command
