@@ -13,6 +13,7 @@ from ..cameras import Camera
 from ..models.gaussian import GaussianModel
 from internal.utils.seganygs import ScaleGateUtils, SegAnyGSUtils
 
+import gc
 import datetime
 import viser
 
@@ -814,29 +815,35 @@ class ViewerOptions:
     """
     def _setup_animate_gaussian_folder(self):
         with self.server.gui.add_folder("Animate"):
+            self.frames = None
+            seed = self.server.gui.add_number(
+                label="SEED",
+                initial_value=0
+            )
+            generate_animation_button = self.server.gui.add_button("Generate Animation")
             preview_animation_button = self.server.gui.add_button("Preview Animation")
+            preview_animation_button.disabled = True
             apply_animation_button = self.server.gui.add_button("Apply Animation")
+            apply_animation_button.disabled = True
 
-            @preview_animation_button.on_click
+            @generate_animation_button.on_click
             def _(event: viser.GuiEvent):
                 # skip if not triggered by client
                 if event.client is None:
                     return
                 try:
+                    generate_animation_button.disabled = True
                     preview_animation_button.disabled = True
+                    apply_animation_button.disabled = True
                     with self.server.atomic():
                         try:
                             if self.segment_mask is not None:
                                 camera = self._get_camera(event.client)
                                 with torch.no_grad():
                                     image = self._get_image(self.viewer.gaussian_model, camera, self.viewer.scaling_modifier.value)
-                                    image = torch.permute(image, (1, 2, 0))
-                                    event.client.set_background_image(
-                                        image.cpu().numpy(),
-                                        format=self.viewer.image_format,
-                                        jpeg_quality=self.viewer.max_res_when_static.value,
-                                    )
-                                message_text = "Preview Animation Created"
+                                    self.frames = self._get_driving_video_frames(image, seed=seed.value)
+                                    self._visualize_frames(event.client)
+                                message_text = "Animation Generated"
                             else:
                                 message_text = "Nothing Selected"
 
@@ -849,6 +856,25 @@ class ViewerOptions:
                                 @close_button.on_click
                                 def _(_) -> None:
                                     modal.close()
+                        except:
+                            traceback.print_exc()
+                finally:
+                    generate_animation_button.disabled = False
+                    preview_animation_button.disabled = False
+                    apply_animation_button.disabled = False
+
+            @preview_animation_button.on_click
+            def _(event: viser.GuiEvent):
+                # skip if not triggered by client
+                if event.client is None:
+                    return
+                try:
+                    preview_animation_button.disabled = True
+                    with self.server.atomic():
+                        try:
+                            with torch.no_grad():
+                                if self.frames is not None:
+                                    self._visualize_frames(event.client)
                         except:
                             traceback.print_exc()
                 finally:
@@ -894,3 +920,128 @@ class ViewerOptions:
             image = image.repeat(3, 1, 1)
         image = torch.clamp(image, max=1.)
         return image
+
+    def _get_driving_video_frames(self, image, size=512, seed=42):
+        from PIL import Image
+        from diffusers import StableVideoDiffusionPipeline
+        
+        # Process the image
+        processed_image = self._process_image(image)
+
+        # Add white backgorund
+        processed_image = self._add_whitebackground(processed_image)
+
+        # Convert to PIL Image
+        input_img = Image.fromarray(processed_image)
+
+        # Load the image generation model
+        pipe = StableVideoDiffusionPipeline.from_pretrained(
+            "stabilityai/stable-video-diffusion-img2vid", torch_dtype=torch.float16, variant="fp16"
+        )
+        pipe.to("cuda")
+
+        # Define a generator with the seed
+        generator = torch.manual_seed(seed)
+
+        # Generate the frames
+        frames = pipe(input_img, size, size, generator=generator).frames[0]
+
+        # Delete pipe to save memory
+        del pipe
+        gc.collect()  # Force garbage collection
+        torch.cuda.empty_cache()  # Free GPU memory
+
+        return frames
+
+    def _process_image(self, image, model="u2net", size=512, border_ratio=0.2):
+        import rembg
+        import numpy as np
+        import cv2
+
+        # Load a rembg model
+        session = rembg.new_session(model_name=model)
+
+        # Permutate the shape of the image
+        image = torch.permute(image, (1, 2, 0))
+        
+        # Convert to numpy array and convert bgr to gbr
+        image = image.cpu().numpy()[..., ::-1]
+
+        # Convert float32 image to uint8 image
+        image = (image * 255.0).astype(np.uint8)
+
+        # Remove background
+        carved_image = rembg.remove(image, session=session) # [H, W, 4]
+
+        # recenter
+        coords = np.nonzero(carved_image[..., -1] > 0)
+        x_min, x_max = coords[0].min(), coords[0].max()
+        y_min, y_max = coords[1].min(), coords[1].max()
+        h = x_max - x_min
+        w = y_max - y_min
+        desired_size = int(size * (1 - border_ratio))
+        scale = desired_size / max(h, w)
+        h2 = int(h * scale)
+        w2 = int(w * scale)
+        x2_min = (size - h2) // 2
+        x2_max = x2_min + h2
+        y2_min = (size - w2) // 2
+        y2_max = y2_min + w2
+
+        # Initialise an empty image
+        final_rgba = np.zeros((size, size, 4), dtype=np.uint8)
+
+        # Resize the image and overlay to the white image
+        final_rgba[x2_min:x2_max, y2_min:y2_max] = cv2.resize(carved_image[x_min:x_max, y_min:y_max], (w2, h2), interpolation=cv2.INTER_AREA)
+
+        # Delete rembg session to save memory
+        del session
+        gc.collect()  # Force garbage collection
+        torch.cuda.empty_cache()  # Free GPU memory
+
+        return final_rgba
+    
+    def _add_whitebackground(self, image):
+        import rembg
+        import numpy as np
+
+        # Remove background
+        session = rembg.new_session()
+        img = rembg.remove(image, session=session)
+
+        # Convert to float32
+        img = img.astype(np.float32) / 255.0
+
+        # Add white background
+        input_mask = img[..., 3:]
+        input_img = img[..., :3] * input_mask + (1 - input_mask)
+
+        # Convert bgr to rgb
+        input_img = input_img[..., ::-1].copy()
+
+        # Convert to uint8
+        input_img = (input_img * 255).astype(np.uint8)
+
+        # Delete rembg session to save memory
+        del session
+        gc.collect()  # Force garbage collection
+        torch.cuda.empty_cache()  # Free GPU memory
+
+        return input_img
+
+    def _visualize_frames(self, client, fps=7):
+        import time
+        if self.frames is not None:
+            sleep_time = 1 / (fps * 8)
+            for frame in self.frames:
+                # Convert PIL image to tensor
+                size = frame.size[0]
+                frame_tensor = torch.tensor(frame.getdata()).reshape((size, size, 3))
+
+                # Set the frame as background_image
+                client.set_background_image(
+                    frame_tensor.cpu().numpy(),
+                    format=self.viewer.image_format,
+                    jpeg_quality=self.viewer.max_res_when_static.value,
+                )
+                time.sleep(sleep_time)
