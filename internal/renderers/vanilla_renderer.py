@@ -108,7 +108,7 @@ class VanillaRenderer(Renderer):
             colors_precomp = override_color
 
         # Rasterize visible Gaussians to image, obtain their radii (on screen).
-        rendered_image, radii = rasterizer(
+        rasterize_result = rasterizer(
             means3D=means3D,
             means2D=means2D,
             shs=shs,
@@ -118,6 +118,10 @@ class VanillaRenderer(Renderer):
             rotations=rotations,
             cov3D_precomp=cov3D_precomp,
         )
+        if len(rasterize_result) == 2:
+            rendered_image, radii = rasterize_result
+        else:
+            rendered_image, radii, _, _ = rasterize_result
 
         # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
         # They will be excluded from value updates used in the splitting criteria.
@@ -194,7 +198,7 @@ class VanillaRenderer(Renderer):
             rendered_image, radii = rasterize_result
             depth_image = None
         else:
-            rendered_image, radii, depth_image = rasterize_result
+            rendered_image, radii, depth_image, _ = rasterize_result
 
         # Those Gaussians that were frustum culled or had a radius of 0 were not visible.
         # They will be excluded from value updates used in the splitting criteria.

@@ -102,7 +102,7 @@ class PeriodicVibrationGaussianRendererModule(Renderer):
 
         # Rasterize visible Gaussians to image, obtain their radii (on screen).
         screenspace_points = torch.zeros_like(pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device=bg_color.device)
-        contrib, rendered_image, rendered_feature, radii = rasterizer(
+        rasterize_result = rasterizer(
             means3D=means3D,
             means2D=screenspace_points,
             shs=pc.get_shs(),
@@ -114,6 +114,11 @@ class PeriodicVibrationGaussianRendererModule(Renderer):
             cov3D_precomp=None,
             mask=mask,
         )
+
+        if len(rasterize_result) == 2:
+            rendered_image, rendered_feature = rasterize_result
+        else:
+            rendered_image, rendered_feature, _, _ = rasterize_result
 
         rendered_other, rendered_depth, rendered_opacity = rendered_feature.split([0, 1, 1], dim=0)
         rendered_image_before = rendered_image
