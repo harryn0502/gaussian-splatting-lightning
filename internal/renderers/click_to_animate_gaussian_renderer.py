@@ -837,11 +837,18 @@ class ViewerOptions:
                     apply_animation_button.disabled = True
                     with self.server.atomic():
                         try:
+                            # Check segmentation mask exists
                             if self.segment_mask is not None:
+                                # Get the current viewing camera
                                 camera = self._get_camera(event.client)
                                 with torch.no_grad():
+                                    # Generate an image with only the selected object
                                     image = self._get_image(self.viewer.gaussian_model, camera, self.viewer.scaling_modifier.value)
+
+                                    # Generate frames of the driving video
                                     self.frames = self._get_driving_video_frames(image, seed=seed.value)
+
+                                    # Visualise the frames
                                     self._visualize_frames(event.client)
                                 message_text = "Animation Generated"
                             else:
@@ -872,9 +879,9 @@ class ViewerOptions:
                     preview_animation_button.disabled = True
                     with self.server.atomic():
                         try:
-                            with torch.no_grad():
-                                if self.frames is not None:
-                                    self._visualize_frames(event.client)
+                            # Visualise the frames if frames exists
+                            if self.frames is not None:
+                                self._visualize_frames(event.client)
                         except:
                             traceback.print_exc()
                 finally:
@@ -887,17 +894,22 @@ class ViewerOptions:
                     return
                 try:
                     apply_animation_button.disabled = True
-                    message_text = "Animation Applied"
+                    with self.server.atomic():
+                        try:
+                            # Apply Animation
+                            message_text = "Animation Applied"
 
-                    # show message
-                    with event.client.gui.add_modal("Message") as modal:
-                        if message_text is not None:
-                            event.client.gui.add_markdown(message_text)
-                        close_button = event.client.gui.add_button("Close")
+                            # show message
+                            with event.client.gui.add_modal("Message") as modal:
+                                if message_text is not None:
+                                    event.client.gui.add_markdown(message_text)
+                                close_button = event.client.gui.add_button("Close")
 
-                        @close_button.on_click
-                        def _(_) -> None:
-                            modal.close()
+                                @close_button.on_click
+                                def _(_) -> None:
+                                    modal.close()
+                        except:
+                            traceback.print_exc()
                 finally:
                     apply_animation_button.disabled = False
 
@@ -1032,7 +1044,6 @@ class ViewerOptions:
     def _visualize_frames(self, client, fps=7):
         import time
         if self.frames is not None:
-            sleep_time = 1 / (fps * 8)
             for frame in self.frames:
                 # Convert PIL image to tensor
                 size = frame.size[0]
@@ -1044,4 +1055,3 @@ class ViewerOptions:
                     format=self.viewer.image_format,
                     jpeg_quality=self.viewer.max_res_when_static.value,
                 )
-                time.sleep(sleep_time)

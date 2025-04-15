@@ -113,8 +113,10 @@ pip install -r requirements.txt
     # Install requirements
     pip install xformers==0.0.23 --no-deps --index-url https://download.pytorch.org/whl/cu118
     pip install -r submodules/dreamgaussian4d/requirements.txt
+    ```
 
-    # Modified gaussian splatting (+ depth, alpha rendering)
+  * Modified gaussian splatting (+ depth, alpha rendering)
+    ```bash
     git submodule update --init --recursive submodules/diff-gaussian-rasterization
     pip install ./submodules/diff-gaussian-rasterization
     ```
