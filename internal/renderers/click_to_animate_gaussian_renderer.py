@@ -1082,6 +1082,8 @@ class ViewerOptions:
         opt["sh_degree"] = 3
         return opt
 
+import sys
+sys.path.append("submodules/dreamgaussian4d")
 from submodules.dreamgaussian4d.dg import GUI
 class MyDG(GUI):
     def __init__(self, opt, image):
