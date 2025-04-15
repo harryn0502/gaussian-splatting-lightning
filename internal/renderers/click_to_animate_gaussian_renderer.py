@@ -816,6 +816,7 @@ class ViewerOptions:
     def _setup_animate_gaussian_folder(self):
         with self.server.gui.add_folder("Animate"):
             self.frames = None
+            self.input_image = None
             seed = self.server.gui.add_number(
                 label="SEED",
                 initial_value=0
@@ -843,10 +844,13 @@ class ViewerOptions:
                                 camera = self._get_camera(event.client)
                                 with torch.no_grad():
                                     # Generate an image with only the selected object
-                                    image = self._get_image(self.viewer.gaussian_model, camera, self.viewer.scaling_modifier.value)
+                                    screen_image = self._get_image(self.viewer.gaussian_model, camera, self.viewer.scaling_modifier.value)
+
+                                    # Process the image
+                                    self.input_image = self._process_image(screen_image)
 
                                     # Generate frames of the driving video
-                                    self.frames = self._get_driving_video_frames(image, seed=seed.value)
+                                    self.frames = self._get_driving_video_frames(self.input_image, seed=seed.value)
 
                                     # Visualise the frames
                                     self._visualize_frames(event.client)
@@ -896,8 +900,21 @@ class ViewerOptions:
                     apply_animation_button.disabled = True
                     with self.server.atomic():
                         try:
-                            # Apply Animation
-                            message_text = "Animation Applied"
+                            # Check input_image and frames exists
+                            if self.input_image is not None and self.frames is not None:
+                                # Load the default config file
+                                opt = self._load_config("submodules/dreamgaussian4d/configs/dghd.yaml")
+
+                                # Generate a static gaussian
+                                dg = MyDG(opt, self.input_image)
+                                static_gaussian = dg.train(opt.iters)
+                                # breakpoint()
+
+                                # Generate a dynamic gaussian
+
+                                message_text = "Animation Applied"
+                            else:
+                                message_text = "No Animation Generated"
 
                             # show message
                             with event.client.gui.add_modal("Message") as modal:
@@ -936,12 +953,9 @@ class ViewerOptions:
     def _get_driving_video_frames(self, image, size=512, seed=42):
         from PIL import Image
         from diffusers import StableVideoDiffusionPipeline
-        
-        # Process the image
-        processed_image = self._process_image(image)
 
-        # Add white backgorund
-        processed_image = self._add_whitebackground(processed_image)
+        # Resize and add white backgorund
+        processed_image = self._resize_add_whitebackground(image, size)
 
         # Convert to PIL Image
         input_img = Image.fromarray(processed_image)
@@ -965,7 +979,7 @@ class ViewerOptions:
 
         return frames
 
-    def _process_image(self, image, model="u2net", size=512, border_ratio=0.2):
+    def _process_image(self, image, model="u2net", size=256, border_ratio=0.2):
         import rembg
         import numpy as np
         import cv2
@@ -1013,13 +1027,15 @@ class ViewerOptions:
 
         return final_rgba
     
-    def _add_whitebackground(self, image):
+    def _resize_add_whitebackground(self, image, size=512):
         import rembg
+        import cv2
         import numpy as np
 
         # Remove background
         session = rembg.new_session()
         img = rembg.remove(image, session=session)
+        img = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
 
         # Convert to float32
         img = img.astype(np.float32) / 255.0
@@ -1055,3 +1071,46 @@ class ViewerOptions:
                     format=self.viewer.image_format,
                     jpeg_quality=self.viewer.max_res_when_static.value,
                 )
+
+    def _load_config(self, config_path):
+        from omegaconf import OmegaConf
+        # Load the config file
+        opt = OmegaConf.load(config_path)
+
+        # Change some parameters
+        opt["num_pts"] = 10000
+        opt["sh_degree"] = 3
+        return opt
+
+from submodules.dreamgaussian4d.dg import GUI
+class MyDG(GUI):
+    def __init__(self, opt, image):
+        super().__init__(opt)
+        self.load_input(image)
+
+    def load_input(self, input_image):
+        import cv2
+        import numpy as np
+
+        image = cv2.resize(input_image, (self.W, self.H), interpolation=cv2.INTER_AREA)
+        image = image.astype(np.float32) / 255.0
+
+        self.input_mask = image[..., 3:]
+        # white bg
+        self.input_img = image[..., :3] * self.input_mask + (1 - self.input_mask)
+        # bgr to rgb
+        self.input_img = self.input_img[..., ::-1].copy()
+
+    # no gui mode
+    def train(self, iters=500):
+        import tqdm
+        if iters > 0:
+            self.prepare_train()
+            
+            for i in tqdm.trange(iters):
+                self.train_step()
+            # do a last prune
+            self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
+            
+        # Return the static gaussian
+        return self.renderer.gaussians
