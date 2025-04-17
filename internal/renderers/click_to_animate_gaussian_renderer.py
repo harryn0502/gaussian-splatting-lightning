@@ -902,15 +902,20 @@ class ViewerOptions:
                         try:
                             # Check input_image and frames exists
                             if self.input_image is not None and self.frames is not None:
-                                # Load the default config file
-                                opt = self._load_config("submodules/dreamgaussian4d/configs/dghd.yaml")
+                                # Load the default dghd config file
+                                dg3d_opt = self._load_config("submodules/dreamgaussian4d/configs/dghd.yaml")
 
                                 # Generate a static gaussian
-                                dg = MyDG(opt, self.input_image)
-                                static_gaussian = dg.train(opt.iters)
-                                # breakpoint()
+                                dg3d = MyDG3D(dg3d_opt, self.input_image)
+                                static_gaussians = dg3d.train(dg3d_opt.iters)
+
+                                # Load the default dghd config file
+                                dg4d_opt = self._load_config("submodules/dreamgaussian4d/configs/4d.yaml")
 
                                 # Generate a dynamic gaussian
+                                dg4d = MyDG4D(dg4d_opt, self.frames, static_gaussians)
+                                dynamic_gaussian = dg4d.train(dg4d_opt.iters)
+
 
                                 message_text = "Animation Applied"
                             else:
@@ -1082,10 +1087,12 @@ class ViewerOptions:
         opt["sh_degree"] = 3
         return opt
 
+# Import DreamGaussian4D
 import sys
 sys.path.append("submodules/dreamgaussian4d")
-from submodules.dreamgaussian4d.dg import GUI
-class MyDG(GUI):
+from submodules.dreamgaussian4d.dg import GUI as GUI_3D
+from submodules.dreamgaussian4d.main_4d import GUI as GUI_4D
+class MyDG3D(GUI_3D):
     def __init__(self, opt, image):
         super().__init__(opt)
         self.load_input(image)
@@ -1103,7 +1110,6 @@ class MyDG(GUI):
         # bgr to rgb
         self.input_img = self.input_img[..., ::-1].copy()
 
-    # no gui mode
     def train(self, iters=500):
         import tqdm
         if iters > 0:
@@ -1113,6 +1119,87 @@ class MyDG(GUI):
                 self.train_step()
             # do a last prune
             self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
+
+        self.save_model(mode='model')
             
-        # Return the static gaussian
+        # Return the static gaussians
+        return self.renderer.gaussians
+
+class MyDG4D(GUI_4D):
+    def __init__(self, opt, frames, gaussians):
+        super().__init__(opt)
+        self.load_input(frames)
+        self.load_static_gaussians(gaussians)
+
+    def load_input(self, frames):
+        import cv2
+        import rembg
+        import numpy as np
+
+        self.input_img_list, self.input_mask_list = [], []
+        for frame in frames[:self.opt.batch_size]:
+            # Get size
+            size = frame.size[0]
+
+            # Convert to numpy
+            img = np.array(frame.getdata(), dtype=np.uint8).reshape((size, size, 3))
+
+            # rgb to bgr
+            img = img[..., ::-1].copy()
+
+            # Remove background
+            if img.shape[-1] == 3:
+                if self.bg_remover is None:
+                    self.bg_remover = rembg.new_session()
+                img = rembg.remove(img, session=self.bg_remover)
+
+            # Resize the img
+            img = cv2.resize(img, (self.W, self.H), interpolation=cv2.INTER_AREA)
+
+            # Convert to float32
+            img = img.astype(np.float32) / 255.0
+
+            # Extract the mask
+            input_mask = img[..., 3:]
+            # Add white background
+            input_img = img[..., :3] * input_mask + (1 - input_mask)
+
+            # bgr to rgb
+            input_img = input_img[..., ::-1].copy()
+
+            # Save the images and masks as list
+            self.input_img_list.append(input_img)
+            self.input_mask_list.append(input_mask)
+    
+    def load_static_gaussians(self, gaussians):
+        from submodules.dreamgaussian4d.gaussian_model_4d import GaussianModel
+
+        # Define a 4D GaussianModel
+        gs4d = GaussianModel(gaussians.max_sh_degree, self.opt.deformation)
+
+        # Set the class variables with the value of the input gaussians
+        gs4d.spatial_lr_scale = 1
+        gs4d._xyz = gaussians._xyz.clone().detach().requires_grad_()
+        gs4d._features_dc = gaussians._features_dc.clone().detach().requires_grad_()
+        gs4d._features_rest = gaussians._features_rest.clone().detach().requires_grad_()
+        gs4d._opacity = gaussians._opacity.clone().detach().requires_grad_()
+        gs4d._scaling = gaussians._scaling.clone().detach().requires_grad_()
+        gs4d._rotation = gaussians._rotation.clone().detach().requires_grad_()
+        gs4d.active_sh_degree = gaussians.max_sh_degree
+        gs4d.max_radii2D = torch.zeros((gaussians.get_xyz.shape[0]), device="cuda")
+        gs4d._deformation = gs4d._deformation.to("cuda")
+        gs4d._deformation_table = torch.gt(torch.ones((gaussians.get_xyz.shape[0]),device="cuda"),0) # everything deformed
+
+        # Replace the renderer's 4d gaussians with the new 4D GaussianModel
+        self.renderer.gaussians = gs4d
+
+    def train(self, iters=500):
+        import tqdm
+        if iters > 0:
+            self.prepare_train()
+            
+            for i in tqdm.trange(iters):
+                self.train_step()
+
+        # Return the dynamic gaussians
         return self.renderer.gaussians
