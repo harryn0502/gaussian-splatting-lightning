@@ -911,6 +911,7 @@ class ViewerOptions:
 
                                 # Load the default dghd config file
                                 dg4d_opt = self._load_config("submodules/dreamgaussian4d/configs/4d.yaml")
+                                dg4d_opt.batch_size = 5
 
                                 # Generate a dynamic gaussian
                                 dg4d = MyDG4D(dg4d_opt, self.frames, static_gaussians)
@@ -1083,8 +1084,8 @@ class ViewerOptions:
         opt = OmegaConf.load(config_path)
 
         # Change some parameters
-        opt["num_pts"] = 10000
-        opt["sh_degree"] = 3
+        opt.num_pts = 10000
+        opt.sh_degree = 3
         return opt
 
 # Import DreamGaussian4D

@@ -183,7 +183,6 @@ class Viewer:
             elif vanilla_ctag is True:
                 self.enable_transform = True
                 renderer = self._load_vanilla_ctag(load_from)
-                turn_off_edit_and_video_render_panel()
             elif vanilla_mip is True:
                 renderer = self._load_vanilla_mip(load_from)
                 turn_off_edit_and_video_render_panel()
