@@ -2,6 +2,12 @@ import torch
 import numpy as np
 from internal.utils import gaussian_utils
 
+import sys
+sys.path.append("submodules/dreamgaussian4d")
+from submodules.dreamgaussian4d.gaussian_model_4d import GaussianModel as GaussianModel4D
+from internal.models.vanilla_gaussian import VanillaGaussianModel
+
+from copy import deepcopy
 
 class MultipleGaussianModelEditor:
     def __init__(
@@ -14,6 +20,7 @@ class MultipleGaussianModelEditor:
             gaussian_models: must be same type, sh_degree and pre-activated state
         """
         self.device = device
+        self.gaussian_models = gaussian_models
         if self.device is None:
             self.device = gaussian_models[0].means.device
 
@@ -27,7 +34,7 @@ class MultipleGaussianModelEditor:
         self.model_gaussian_indices = model_gaussian_indices
 
         if len(gaussian_models) == 1:
-            self.gaussian_model = gaussian_models[0]
+            self.gaussian_model = deepcopy(gaussian_models[0])
         else:
             # create a same model type
             self.gaussian_model = gaussian_models[0].config.instantiate()
@@ -40,6 +47,7 @@ class MultipleGaussianModelEditor:
             # store all properties into this model
             self.gaussian_model.properties = self._concat_all_properties(gaussian_models, self.device)
 
+        self.delete_history = []
         self._modified_opacities = None
         self._original_properties = None
 
@@ -52,6 +60,70 @@ class MultipleGaussianModelEditor:
         for name in models[0].property_names:
             properties[name] = torch.concat([model.get_property(name).to(device) for model in models], dim=0)
         return properties
+    
+    def replace_properties_with_time(self, time):
+        # Get the list of gaussian_models
+        models = self.gaussian_models
+
+        # Get the property_names of the VanillaGaussianModel
+        property_names = models[0].property_names
+
+        # Loop through the models
+        properties = {}
+        total_gaussian_num = 0
+        for model in models:
+            if isinstance(model, VanillaGaussianModel):
+                # Get each properties and save in a dict as list
+                for name in property_names:
+                    property = model.get_property(name).to(self.device)
+
+                    if len(self.delete_history) > 0:
+                        for delete in self.delete_history:
+                            property = property[delete]
+
+                    if name not in properties:
+                        properties[name] = []
+                    properties[name].append(property)
+
+            elif isinstance(model, GaussianModel4D):
+                # Compute the interpolation time index as time * batch_size
+                t = time * model.T
+
+                # Get time-dependent deformed properties
+                means, rotations, scales, opacities = model.get_deformed_everything(t)
+
+                # Apply activations
+                scales = model.scaling_activation(scales)
+                rotations = model.rotation_activation(rotations)
+                opacities = model.opacity_activation(opacities)
+
+                # Get constant properties
+                shs = model.get_features
+
+                # Append each property to the corresponding list
+                for name, value in zip(property_names, [means, opacities, scales, rotations, shs]):
+                    if name not in properties:
+                        properties[name] = []
+                    properties[name].append(value)
+
+        # Replace the model_gaussian_indices
+        total_gaussian_num = 0
+        model_gaussian_indices = []
+        for property in properties[property_names[0]]:
+            n = property.shape[0]
+            model_gaussian_indices.append((total_gaussian_num, total_gaussian_num + n))
+            total_gaussian_num += n
+        self.model_gaussian_indices = model_gaussian_indices
+
+        # Concatenate the properties across models
+        for name in property_names:
+            properties[name] = torch.concat(properties[name], dim=0)
+
+        # Replace the current gaussian_model's properties with the new ones
+        self.gaussian_model.properties = properties
+
+        # Backup the properties
+        self.backup_properties()
 
     def get_opacities(self):
         if self._modified_opacities is None:
@@ -71,6 +143,17 @@ class MultipleGaussianModelEditor:
 
         gaussians_to_be_preserved = torch.bitwise_not(mask).to(device=self.gaussian_model.means.device)
 
+        # Ensure gaussians_to_be_preserved matches the length of the gaussian_model
+        expected_len = self.gaussian_model.means.shape[0]
+        current_len = gaussians_to_be_preserved.shape[0]
+        if current_len < expected_len:
+            extra = torch.ones(expected_len - current_len, dtype=torch.bool, device=gaussians_to_be_preserved.device)
+            gaussians_to_be_preserved = torch.cat([gaussians_to_be_preserved, extra], dim=0)
+
+        # Save it to the delete history
+        begin, end = self.model_gaussian_indices[0]
+        self.delete_history.append(gaussians_to_be_preserved[begin:end])
+
         # delete for each model
         new_properties = {}
         new_original_properties = {}
@@ -80,13 +163,15 @@ class MultipleGaussianModelEditor:
             for begin, end in self.model_gaussian_indices:
                 model_property = value[begin:end]
                 model_property_mask = gaussians_to_be_preserved[begin:end]
-                new_properties[key].append(model_property[model_property_mask])
+                if model_property_mask.numel() > 0:
+                    new_properties[key].append(model_property[model_property_mask])
 
                 # prune original properties if exists
                 if self._original_properties is not None and key in self._original_properties:
                     model_original_property = self._original_properties[key][begin:end]
                     model_original_property_mask = gaussians_to_be_preserved[begin:end].to(model_original_property.device)
-                    new_original_properties[key].append(model_original_property[model_original_property_mask])
+                    if model_original_property_mask.numel() > 0:
+                        new_original_properties[key].append(model_original_property[model_original_property_mask])
 
         # recalculate index range
         total_gaussian_num = 0

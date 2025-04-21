@@ -178,19 +178,52 @@ class ClickToAnimateGaussian(Renderer):
     def _segment_as_color(self, project_results, pc: GaussianModel, viewpoint_camera, bg_color, opacities):
         colors, bg_color, opacities = self._shs_to_rgb(project_results, pc, viewpoint_camera, bg_color, opacities)
         if self.segment_mask is not None:
-            colors[self.segment_mask] = torch.tensor([0., 1., 1.], dtype=torch.float, device=bg_color.device)
+            editor = self.viewer_options.viewer.viewer_renderer.gaussian_model
+            delete_history = editor.delete_history
+            new_segment_mask = self.segment_mask.clone()
+            if len(delete_history) > 0:
+                for delete in delete_history:
+                    new_segment_mask = new_segment_mask[delete]
+                current_len = new_segment_mask.shape[0]
+                expected_len = colors.shape[0]
+                if current_len < expected_len:
+                    extra = torch.zeros(expected_len - current_len, dtype=torch.bool, device=new_segment_mask.device)
+                    new_segment_mask = torch.cat([new_segment_mask, extra], dim=0)
+            colors[new_segment_mask] = torch.tensor([0., 1., 1.], dtype=torch.float, device=bg_color.device)
         return colors, bg_color, opacities
 
     def _segment_out(self, project_results, pc: GaussianModel, viewpoint_camera, bg_color, opacities):
         colors, bg_color, opacities = self._shs_to_rgb(project_results, pc, viewpoint_camera, bg_color, opacities)
         if self.segment_mask is not None:
-            opacities = opacities * self.segment_mask.unsqueeze(-1)
+            editor = self.viewer_options.viewer.viewer_renderer.gaussian_model
+            delete_history = editor.delete_history
+            new_segment_mask = self.segment_mask.clone()
+            if len(delete_history) > 0:
+                for delete in delete_history:
+                    new_segment_mask = new_segment_mask[delete]
+                current_len = new_segment_mask.shape[0]
+                expected_len = colors.shape[0]
+                if current_len < expected_len:
+                    extra = torch.zeros(expected_len - current_len, dtype=torch.bool, device=new_segment_mask.device)
+                    new_segment_mask = torch.cat([new_segment_mask, extra], dim=0)
+            opacities = opacities * new_segment_mask.unsqueeze(-1)
         return colors, bg_color, opacities
 
     def _segment_removed(self, project_results, pc: GaussianModel, viewpoint_camera, bg_color, opacities):
         colors, bg_color, opacities = self._shs_to_rgb(project_results, pc, viewpoint_camera, bg_color, opacities)
         if self.segment_mask is not None:
-            opacities = opacities * (~self.segment_mask).unsqueeze(-1)
+            editor = self.viewer_options.viewer.viewer_renderer.gaussian_model
+            delete_history = editor.delete_history
+            new_segment_mask = self.segment_mask.clone()
+            if len(delete_history) > 0:
+                for delete in delete_history:
+                    new_segment_mask = new_segment_mask[delete]
+                current_len = new_segment_mask.shape[0]
+                expected_len = colors.shape[0]
+                if current_len < expected_len:
+                    extra = torch.zeros(expected_len - current_len, dtype=torch.bool, device=new_segment_mask.device)
+                    new_segment_mask = torch.cat([new_segment_mask, extra], dim=0)
+            opacities = opacities * (~new_segment_mask).unsqueeze(-1)
         return colors, bg_color, opacities
 
     def setup_web_viewer_tabs(self, viewer, server, tabs):
@@ -514,7 +547,7 @@ class ViewerOptions:
 
             self._feature_map = feature_map_render(
                 viewpoint_camera=camera,
-                pc=viewer.viewer_renderer.gaussian_model,
+                pc=viewer.viewer_renderer.gaussian_model.gaussian_models[0],
                 bg_color=torch.zeros((self.semantic_features.shape[-1],), dtype=torch.float, device=viewer.device),
                 semantic_features=self.semantic_features.to(device=viewer.device),
             )["render"].permute(1, 2, 0)
@@ -819,7 +852,7 @@ class ViewerOptions:
             self.input_image = None
             seed = self.server.gui.add_number(
                 label="SEED",
-                initial_value=0
+                initial_value=42
             )
             generate_animation_button = self.server.gui.add_button("Generate Animation")
             preview_animation_button = self.server.gui.add_button("Preview Animation")
@@ -901,22 +934,46 @@ class ViewerOptions:
                     with self.server.atomic():
                         try:
                             # Check input_image and frames exists
-                            if self.input_image is not None and self.frames is not None:
+                            if self.input_image is not None and self.frames is not None and self.segment_mask is not None:
+
                                 # Load the default dghd config file
                                 dg3d_opt = self._load_config("submodules/dreamgaussian4d/configs/dghd.yaml")
 
                                 # Generate a static gaussian
                                 dg3d = MyDG3D(dg3d_opt, self.input_image)
                                 static_gaussians = dg3d.train(dg3d_opt.iters)
+                                # static_gaussians = None
 
                                 # Load the default dghd config file
                                 dg4d_opt = self._load_config("submodules/dreamgaussian4d/configs/4d.yaml")
                                 dg4d_opt.batch_size = 5
+                                # dg4d_opt.load = "logs/vase_rgba_model.ply"
 
                                 # Generate a dynamic gaussian
                                 dg4d = MyDG4D(dg4d_opt, self.frames, static_gaussians)
-                                dynamic_gaussian = dg4d.train(dg4d_opt.iters)
+                                dynamic_gaussians = dg4d.train(dg4d_opt.iters)
 
+                                # Get the viewer's gaussian model
+                                gaussian_model = self.viewer.viewer_renderer.gaussian_model
+
+                                # Append the dynamic_gaussian model
+                                gaussian_model.gaussian_models.append(dynamic_gaussians)
+
+                                # Replace the viewer's gaussian model properties
+                                time = self.viewer.time_slider.value
+                                gaussian_model.replace_properties_with_time(time)
+
+                                # Delete the selected object
+                                gaussian_model.delete_gaussians(self.segment_mask)
+
+                                # Reset the mask
+                                self.segment_mask = None
+
+                                # Switch to RGB mode
+                                self._switch_renderer_output_type("rgb")
+
+                                # Recreate the transform panel
+                                self.viewer.recreate_transform_panel(self.server)
 
                                 message_text = "Animation Applied"
                             else:
@@ -1064,7 +1121,6 @@ class ViewerOptions:
         return input_img
 
     def _visualize_frames(self, client, fps=7):
-        import time
         if self.frames is not None:
             for frame in self.frames:
                 # Convert PIL image to tensor
@@ -1093,6 +1149,7 @@ import sys
 sys.path.append("submodules/dreamgaussian4d")
 from submodules.dreamgaussian4d.dg import GUI as GUI_3D
 from submodules.dreamgaussian4d.main_4d import GUI as GUI_4D
+from submodules.dreamgaussian4d.gaussian_model_4d import GaussianModel as GaussianModel4D
 class MyDG3D(GUI_3D):
     def __init__(self, opt, image):
         super().__init__(opt)
@@ -1121,8 +1178,6 @@ class MyDG3D(GUI_3D):
             # do a last prune
             self.renderer.gaussians.prune(min_opacity=0.01, extent=1, max_screen_size=1)
 
-        self.save_model(mode='model')
-            
         # Return the static gaussians
         return self.renderer.gaussians
 
@@ -1173,10 +1228,9 @@ class MyDG4D(GUI_4D):
             self.input_mask_list.append(input_mask)
     
     def load_static_gaussians(self, gaussians):
-        from submodules.dreamgaussian4d.gaussian_model_4d import GaussianModel
 
         # Define a 4D GaussianModel
-        gs4d = GaussianModel(gaussians.max_sh_degree, self.opt.deformation)
+        gs4d = GaussianModel4D(gaussians.max_sh_degree, self.opt.deformation)
 
         # Set the class variables with the value of the input gaussians
         gs4d.spatial_lr_scale = 1

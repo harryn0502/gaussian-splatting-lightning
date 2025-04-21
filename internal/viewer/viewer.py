@@ -560,6 +560,7 @@ class Viewer:
             server_config_fun(self, server)
 
         tabs = server.gui.add_tab_group()
+        self.tabs = tabs
 
         if tab_config_fun is not None:
             tab_config_fun(self, server, tabs)
@@ -670,7 +671,7 @@ class Viewer:
                     step=0.01,
                     initial_value=0.,
                 )
-                self.time_slider.on_update(self._handle_option_updated)
+                self.time_slider.on_update(self._handle_time_updated)
 
             # add cameras
             if self.show_cameras is True:
@@ -784,6 +785,44 @@ class Viewer:
         Simply push new render to all client
         """
         return self.rerender_for_all_client()
+
+    def _handle_time_updated(self, _):
+        """
+        Update time and push new render to all client
+        """
+        from internal.renderers.click_to_animate_gaussian_renderer import ClickToAnimateGaussian
+        # Check if the renderer is ClickToAnimateGaussian
+        if isinstance(self.viewer_renderer.renderer, ClickToAnimateGaussian):
+            # Replace the gaussian model's properties with time applied
+            self.gaussian_model.replace_properties_with_time(self.time_slider.value)
+            # Transform all the models
+            self.transform_panel.transform_all_models()
+        return self._handle_option_updated(_)
+    
+    def recreate_transform_panel(self, server):
+        # Get the index of the transform panel
+        transform_gui_panel_index = self.tabs._labels.index("Transform")
+
+        # Get the panel
+        transform_gui_panel = self.tabs._tabs[transform_gui_panel_index]
+
+        # Remove the panel
+        transform_gui_panel.remove()
+
+        # Redraw the panel
+        with self.tabs.add_tab("Transform"):
+            self.transform_panel = TransformPanel(server, self, len(self.gaussian_model.gaussian_models))
+
+        # Reorder the panel
+        tab = self.tabs._tabs.pop()
+        icon = self.tabs._icons_html.pop()
+        label = self.tabs._labels.pop()
+        self.tabs._tabs.insert(transform_gui_panel_index, tab)
+        self.tabs._icons_html.insert(transform_gui_panel_index, icon)
+        self.tabs._labels.insert(transform_gui_panel_index, label)
+
+        # Sync with the client
+        self.tabs._sync_with_client()
 
     def handle_option_updated(self, _):
         return self._handle_option_updated(_)
