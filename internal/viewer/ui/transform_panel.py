@@ -183,13 +183,7 @@ class TransformPanel:
 
     def transform_all_models(self):
         for idx in range(len(self.model_poses)):
-            model_pose = self.model_poses[idx]
-            self.viewer.gaussian_model.transform_with_vectors(
-                idx,
-                scale=self.model_size_sliders[idx].value,
-                r_wxyz=model_pose.wxyz,
-                t_xyz=model_pose.position,
-            )
+            self._transform_model(idx)
 
     def _make_t_xyz_text_callback(
             self,

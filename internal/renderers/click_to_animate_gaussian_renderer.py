@@ -16,6 +16,7 @@ from internal.utils.seganygs import ScaleGateUtils, SegAnyGSUtils
 import gc
 import datetime
 import viser
+from copy import deepcopy
 
 
 class ClickToAnimateGaussian(Renderer):
@@ -848,8 +849,8 @@ class ViewerOptions:
     """
     def _setup_animate_gaussian_folder(self):
         with self.server.gui.add_folder("Animate"):
-            self.frames = None
             self.input_image = None
+            self.frames = None
             seed = self.server.gui.add_number(
                 label="SEED",
                 initial_value=42
@@ -871,6 +872,9 @@ class ViewerOptions:
                     apply_animation_button.disabled = True
                     with self.server.atomic():
                         try:
+                            # Empty cache
+                            torch.cuda.empty_cache()
+
                             # Check segmentation mask exists
                             if self.segment_mask is not None:
                                 # Get the current viewing camera
@@ -882,7 +886,7 @@ class ViewerOptions:
                                     # Process the image
                                     self.input_image = self._process_image(screen_image)
 
-                                    # Generate frames of the driving video
+                                    # Generate frames of the driving video (require extra 16GB VRAM)
                                     self.frames = self._get_driving_video_frames(self.input_image, seed=seed.value)
 
                                     # Visualise the frames
@@ -935,45 +939,52 @@ class ViewerOptions:
                         try:
                             # Check input_image and frames exists
                             if self.input_image is not None and self.frames is not None and self.segment_mask is not None:
+                                # Get static gaussians (require extra 10GB VRAM)
+                                static_gaussians = self._get_static_gaussians()
 
-                                # Load the default dghd config file
-                                dg3d_opt = self._load_config("submodules/dreamgaussian4d/configs/dghd.yaml")
-
-                                # Generate a static gaussian
-                                dg3d = MyDG3D(dg3d_opt, self.input_image)
-                                static_gaussians = dg3d.train(dg3d_opt.iters)
-                                # static_gaussians = None
-
-                                # Load the default dghd config file
-                                dg4d_opt = self._load_config("submodules/dreamgaussian4d/configs/4d.yaml")
-                                dg4d_opt.batch_size = 5
-                                # dg4d_opt.load = "logs/vase_rgba_model.ply"
-
-                                # Generate a dynamic gaussian
-                                dg4d = MyDG4D(dg4d_opt, self.frames, static_gaussians)
-                                dynamic_gaussians = dg4d.train(dg4d_opt.iters)
+                                # Get dynamic gaussians (require extra 14GB VRAM)
+                                dynamic_gaussians = self._get_dynamic_gaussians(static_gaussians)
 
                                 # Get the viewer's gaussian model
                                 gaussian_model = self.viewer.viewer_renderer.gaussian_model
 
-                                # Append the dynamic_gaussian model
+                                # Append the dynamic gaussian model
                                 gaussian_model.gaussian_models.append(dynamic_gaussians)
 
-                                # Replace the viewer's gaussian model properties
-                                time = self.viewer.time_slider.value
-                                gaussian_model.replace_properties_with_time(time)
-
-                                # Delete the selected object
+                                # Delete the selected object from the scene
                                 gaussian_model.delete_gaussians(self.segment_mask)
 
                                 # Reset the mask
                                 self.segment_mask = None
 
+                                # Empty cache
+                                torch.cuda.empty_cache()
+
+                                # Add the dynamic gaussian model to the scene
+                                time = self.viewer.time_slider.value
+                                gaussian_model.replace_properties_with_time(time)
+
                                 # Switch to RGB mode
                                 self._switch_renderer_output_type("rgb")
 
+                                # Save the current model transformations
+                                model_poses = deepcopy(self.viewer.transform_panel.model_poses)
+
+                                # Empty cache
+                                torch.cuda.empty_cache()
+
                                 # Recreate the transform panel
                                 self.viewer.recreate_transform_panel(self.server)
+
+                                # Override the model transformations
+                                for i, poses in enumerate(model_poses):
+                                    self.viewer.transform_panel.model_poses[i] = poses
+
+                                # Apply the transformation
+                                self.viewer.transform_panel.transform_all_models()
+
+                                # Empty cache
+                                torch.cuda.empty_cache()
 
                                 message_text = "Animation Applied"
                             else:
@@ -1142,7 +1153,48 @@ class ViewerOptions:
         # Change some parameters
         opt.num_pts = 10000
         opt.sh_degree = 3
+        opt.iters = 100
         return opt
+
+    def _get_static_gaussians(self):
+        # Load the default dghd config file
+        dg3d_opt = self._load_config("submodules/dreamgaussian4d/configs/dghd.yaml")
+
+        # Generate a static gaussian
+        dg3d = MyDG3D(dg3d_opt, self.input_image)
+        static_gaussians = dg3d.train(dg3d_opt.iters)
+
+        # Reset the input image
+        self.input_image = None
+
+        # Delete to Save memory
+        del dg3d_opt
+        del dg3d
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        return static_gaussians
+
+    def _get_dynamic_gaussians(self, static_gaussians):
+        # Load the default dghd config file
+        dg4d_opt = self._load_config("submodules/dreamgaussian4d/configs/4d.yaml")
+        dg4d_opt.batch_size = 5
+        # dg4d_opt.load = "logs/vase_rgba_model.ply"
+
+        # Generate a dynamic gaussian
+        dg4d = MyDG4D(dg4d_opt, self.frames, static_gaussians)
+        dynamic_gaussians = dg4d.train(dg4d_opt.iters)
+
+        # Reset the frames
+        self.frames = None
+
+        # Delete to Save memory
+        del dg4d_opt
+        del dg4d
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        return dynamic_gaussians
 
 # Import DreamGaussian4D
 import sys

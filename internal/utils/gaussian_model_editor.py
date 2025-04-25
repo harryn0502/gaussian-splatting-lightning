@@ -61,6 +61,7 @@ class MultipleGaussianModelEditor:
             properties[name] = torch.concat([model.get_property(name).to(device) for model in models], dim=0)
         return properties
     
+    @torch.no_grad()
     def replace_properties_with_time(self, time):
         # Get the list of gaussian_models
         models = self.gaussian_models
@@ -78,8 +79,14 @@ class MultipleGaussianModelEditor:
                     property = model.get_property(name).to(self.device)
 
                     if len(self.delete_history) > 0:
+                        prev_mask = None
                         for delete in self.delete_history:
-                            property = property[delete]
+                            if prev_mask is None:
+                                mask = delete
+                            else:
+                                mask = delete[prev_mask]
+                            property = property[mask]
+                            prev_mask = delete
 
                     if name not in properties:
                         properties[name] = []
@@ -143,16 +150,15 @@ class MultipleGaussianModelEditor:
 
         gaussians_to_be_preserved = torch.bitwise_not(mask).to(device=self.gaussian_model.means.device)
 
+        # Save it to the delete history
+        self.delete_history.append(gaussians_to_be_preserved)
+
         # Ensure gaussians_to_be_preserved matches the length of the gaussian_model
         expected_len = self.gaussian_model.means.shape[0]
         current_len = gaussians_to_be_preserved.shape[0]
         if current_len < expected_len:
             extra = torch.ones(expected_len - current_len, dtype=torch.bool, device=gaussians_to_be_preserved.device)
             gaussians_to_be_preserved = torch.cat([gaussians_to_be_preserved, extra], dim=0)
-
-        # Save it to the delete history
-        begin, end = self.model_gaussian_indices[0]
-        self.delete_history.append(gaussians_to_be_preserved[begin:end])
 
         # delete for each model
         new_properties = {}

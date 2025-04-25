@@ -105,6 +105,7 @@ pip install -r requirements.txt
   * Download <a href="https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth">ViT-H SAM model</a>, place it to the root dir of this repo.: `wget -O sam_vit_h_4b8939.pth https://dl.fbaipublicfiles.com/segment_anything/sam_vit_h_4b8939.pth`
 
 * If you want to use ClickToAnimateGaussian
+  * SegAnyGaussian (see command above)
   * dreamgaussian4d
     ```bash
     # Update submodules
