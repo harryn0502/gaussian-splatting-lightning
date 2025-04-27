@@ -47,6 +47,7 @@ class Viewer:
             gsplat_v1_example: bool = False,
             gsplat_v1_example_aa: bool = False,
             seganygs: str = None,
+            ctag: str = None,
             vanilla_seganygs: bool = False,
             vanilla_ctag: bool = True,
             vanilla_mip: bool = False,
@@ -242,9 +243,14 @@ class Viewer:
         self.gaussian_model = model
 
         if seganygs is not None:
-            print("loading SegAnyGaussian...")
-            renderer = self._load_seganygs(seganygs)
-            turn_off_edit_and_video_render_panel()
+            if not ctag:
+                print("loading SegAnyGaussian...")
+                renderer = self._load_seganygs(seganygs)
+                turn_off_edit_and_video_render_panel()
+            else:
+                print("loading ClickToAnimateGaussians...")
+                self.enable_transform = True
+                renderer = self._load_ctag(seganygs)
 
         # create renderer
         self.viewer_renderer = ViewerRenderer(
@@ -319,6 +325,27 @@ class Viewer:
 
         from internal.renderers.seganygs_renderer import SegAnyGSRenderer
         return SegAnyGSRenderer(semantic_features=semantic_features, scale_gate=scale_gate, anti_aliased=False)
+    
+    def _load_ctag(self, path):
+        load_from = self._search_load_file(path)
+        assert load_from.endswith(".ckpt")
+        ckpt = torch.load(load_from, map_location="cpu")
+
+        from internal.segany_splatting import SegAnySplatting
+        model = SegAnySplatting(**ckpt["hyper_parameters"])
+        model.setup_parameters(ckpt["state_dict"]["gaussian_semantic_features"].shape[0])
+        model.load_state_dict(ckpt["state_dict"])
+        model.on_load_checkpoint(ckpt)
+        model.eval()
+
+        semantic_features = model.get_processed_semantic_features()
+        scale_gate = model.scale_gate
+        del model
+        del ckpt
+        torch.cuda.empty_cache()
+
+        from internal.renderers.click_to_animate_gaussian_renderer import ClickToAnimateGaussian
+        return ClickToAnimateGaussian(semantic_features=semantic_features, scale_gate=scale_gate)
 
     def _load_vanilla_ctag(self, path):
         from plyfile import PlyData
