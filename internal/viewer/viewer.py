@@ -47,7 +47,7 @@ class Viewer:
             gsplat_v1_example: bool = False,
             gsplat_v1_example_aa: bool = False,
             seganygs: str = None,
-            ctag: str = None,
+            ctag: bool = False,
             vanilla_seganygs: bool = False,
             vanilla_ctag: bool = True,
             vanilla_mip: bool = False,
